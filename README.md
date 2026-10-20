@@ -375,6 +375,8 @@ What the flag deliberately does *not* do:
 
 After a click or a fill, `safari_snapshot` with `diff: true` returns only the lines that changed since that tab's previous snapshot (`+` added, with fresh refs; `-` removed), usually a small fraction of a full snapshot.
 
+Every tool result also names any of the session's tabs that the page or the user closed since its previous call, so their receipts are not used again.
+
 ## Environment variables
 
 Agent tabs open in a window of their own, created in the background at 1440×900 and shared by every session, never among your tabs. Safari has no tab-group API for extensions, so a window stands in for a tab group. Its first tab stays blank so the window survives the agent closing its last tab. `safari_new_tab` with `private: true` opens the tab in a separate private window instead, with no cookies or logins, for logged-out testing. That needs the extension's **Allow in Private Browsing** (Safari → Settings → Extensions); without it the call is refused rather than opened logged in.
