@@ -42,6 +42,7 @@ const tmpHome = mkdtempSync(join(tmpdir(), "smcp-switch-"));
 process.env.HOME = tmpHome;
 const own = await import("../ownership-state.js");
 const { textResult, errorResult, evalResult } = await import("../response.js");
+const { isOpRef, resolveOpRefs, scrubSecrets } = await import("../op-secrets.js");
 after(() => rmSync(tmpHome, { recursive: true, force: true }));
 
 // The MCP session the next call comes from (currentSessionId() in index.js and safari.js).
@@ -297,7 +298,7 @@ function setup(mode) {
   const deps = {
     safari, SESSION_ID: "daemon", currentSessionId: () => sid,
     process: { env: mode.profile ? { SAFARI_PROFILE: mode.profile } : {} },
-    console: { error() {} }, textResult, errorResult, evalResult,
+    console: { error() {} }, textResult, errorResult, evalResult, isOpRef, resolveOpRefs, scrubSecrets,
     sendToExtension: (type, payload) => extension.send(type, payload),
     _evictOldestTab: async () => null, _trackTab: own._trackTab, _untrackTab: own._untrackTab,
     _openedTabs: own._openedTabs, _ownedTabURLs: own._ownedTabURLs, _addOwnedURL: own._addOwnedURL,

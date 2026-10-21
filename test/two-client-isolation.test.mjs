@@ -38,6 +38,7 @@ const tmpHome = mkdtempSync(join(tmpdir(), "smcp-isolation-"));
 process.env.HOME = tmpHome;
 const own = await import("../ownership-state.js");
 const { textResult, errorResult, evalResult } = await import("../response.js");
+const { isOpRef, resolveOpRefs, scrubSecrets } = await import("../op-secrets.js");
 const { escJsSingleQuote, escAppleScriptString } = await import("../injected-escape.js");
 after(() => rmSync(tmpHome, { recursive: true, force: true }));
 
@@ -258,7 +259,7 @@ function loadServer(safari, extension = NO_EXTENSION) {
   const commands = [];
   const deps = {
     safari, SESSION_ID: "daemon", currentSessionId: () => sid,
-    process: { env: {} }, console: { error() {} }, textResult, errorResult, evalResult,
+    process: { env: {} }, console: { error() {} }, textResult, errorResult, evalResult, isOpRef, resolveOpRefs, scrubSecrets,
     sendToExtension: async (type, payload) => {
       commands.push({ type, payload });
       return extension.send(type, payload);

@@ -28,6 +28,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { jpegSize } from "./image-size.js";
+import { isOpRef, resolveOpRefs, scrubSecrets } from "./op-secrets.js";
 import { createSafariSessionHintReader } from "./safari-session-hint.js";
 import { createStaleWorkerPolicy, leaseBuildVerdict, LEASE_BUILD_PREFERENCE_MS, HOME_CONTEXT_ALIVE_MS } from "./worker-upgrade.js";
 import {
@@ -2177,6 +2178,23 @@ async function _rotateReceiptAfterNavigate(result, usedReceipt, oldUrl) {
   return result;
 }
 
+// Fill values written as op://vault/item/field are resolved from 1Password here, for the
+// tab's own site only (op-secrets.js), and any echo of the secret is scrubbed from the result.
+async function _withOpSecrets(args, values, fill) {
+  if (!values.some(isOpRef)) return fill(values);
+  const tab = await extensionOrFallback("get_url", { ..._explicitReceipt(args) }, () => safari.getActiveTabURL());
+  const plain = await resolveOpRefs(values, typeof tab === "string" ? tab : tab?.url);
+  const secrets = plain.filter((_, i) => isOpRef(values[i]));
+  const scrub = (r) => (typeof r === "string" ? scrubSecrets(r, secrets) : JSON.parse(scrubSecrets(JSON.stringify(r), secrets)));
+  try {
+    return scrub(await fill(plain));
+  } catch (err) {
+    // No `cause`: the original error is exactly what may still carry the secret.
+    // eslint-disable-next-line preserve-caught-error
+    throw new Error(scrubSecrets(err?.message || err, secrets));
+  }
+}
+
 function _isBatchSemanticFailure(result) {
   if (Array.isArray(result)) return result.some(_isBatchSemanticFailure);
   if (result && typeof result === "object") return result.ok === false;
@@ -3191,6 +3209,8 @@ server.tool(
 
 // ========== FORM INPUT ==========
 
+const _OP_REF_HINT = " Pass op://vault/item/field to fill a secret from 1Password; it fills only on the item's own https site and never returns the secret.";
+
 server.tool(
   "safari_fill",
   "Fill/replace value in an input, textarea, select, OR contenteditable (rich text). Handles React controlled inputs, ProseMirror, Draft.js, and Google Closure editors automatically. Use for SETTING a value (replaces existing). For code editors (Monaco/CodeMirror/Ace), use safari_replace_editor instead. For character-by-character typing in search boxes, use safari_type_text. IMPORTANT: When using ref, always take a FRESH safari_snapshot first — refs expire after each new snapshot (prefix changes: 5_xx → 6_xx).",
@@ -3198,14 +3218,14 @@ server.tool(
     receipt: z.string().optional().describe("Receipt from safari_new_tab; pins the call to that tab"),
     ref: z.string().optional().describe("Ref ID from safari_snapshot"),
     selector: z.string().optional().describe("CSS selector"),
-    value: z.string().describe("Value to fill"),
+    value: z.string().describe("Value to fill." + _OP_REF_HINT),
   },
   async (args) => {
     const selector = args.ref ? `[data-mcp-ref="${args.ref}"]` : args.selector;
-    const result = await extensionOrFallback(
-      "fill", { selector, value: args.value, ..._explicitReceipt(args) },
-      () => safari.fill(args)
-    );
+    const result = await _withOpSecrets(args, [args.value], ([value]) => extensionOrFallback(
+      "fill", { selector, value, ..._explicitReceipt(args) },
+      () => safari.fill({ ...args, value })
+    ));
     return textResult(result);
   }
 );
@@ -3307,14 +3327,17 @@ server.tool(
     receipt: z.string().optional().describe("Receipt from safari_new_tab; pins the call to that tab"),
     fields: z.array(z.object({
       selector: z.string().describe("CSS selector"),
-      value: z.string().describe("Value to fill"),
+      value: z.string().describe("Value to fill." + _OP_REF_HINT),
     })).describe("Array of {selector, value} pairs"),
   },
   async (args) => {
-    const result = await extensionOrFallback(
-      "fill_form", { fields: args.fields, ..._explicitReceipt(args) },
-      () => safari.fillForm(args)
-    );
+    const result = await _withOpSecrets(args, args.fields.map((f) => f.value), (values) => {
+      const fields = args.fields.map((f, i) => ({ ...f, value: values[i] }));
+      return extensionOrFallback(
+        "fill_form", { fields, ..._explicitReceipt(args) },
+        () => safari.fillForm({ ...args, fields })
+      );
+    });
     return textResult(result);
   }
 );
@@ -4190,6 +4213,10 @@ server.tool(
     })).describe("Array of steps to execute sequentially"),
   },
   async ({ steps }) => {
+    // A batch would type an op:// reference into the page as literal text.
+    if (JSON.stringify(steps).includes('"op://')) {
+      throw new Error("op:// references work only in safari_fill, safari_fill_form and safari_fill_and_submit, not in safari_run_script.");
+    }
     // Preserve the full historical action surface for non-profile installations.
     // Named-profile sessions cannot use it because safari.runScript drives Safari via
     // AppleScript and loses the verified profile/tab-id boundary; they use the
@@ -4861,13 +4888,15 @@ server.tool(
   {
     fields: z.array(z.object({
       selector: z.string().describe("CSS selector"),
-      value: z.string().describe("Value to fill"),
+      value: z.string().describe("Value to fill." + _OP_REF_HINT),
     })).describe("Fields to fill"),
     submitSelector: z.string().optional().describe("Submit button selector (auto-detected if omitted)"),
   },
   async (args) => {
     _assertTabOwnership("fill_and_submit");
-    const result = await safari.fillAndSubmit(args);
+    const result = await _withOpSecrets(args, args.fields.map((f) => f.value), (values) =>
+      safari.fillAndSubmit({ ...args, fields: args.fields.map((f, i) => ({ ...f, value: values[i] })) })
+    );
     return textResult(result);
   }
 );
