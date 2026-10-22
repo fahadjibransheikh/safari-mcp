@@ -509,6 +509,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // A page pinging while this worker sits in reconnect backoff is the earliest sign that
     // the bridge is reachable again (the daemon releases wake polls while it has no verified
     // worker). Retry now instead of waiting out a backoff of up to a minute.
+    _restartStalledBridge();
     if (!isConnected && !_connecting) {
       if (_reconnectTimer) { clearTimeout(_reconnectTimer); _reconnectTimer = null; }
       connect();
@@ -593,8 +594,34 @@ function updateBadge(text) {
 // ========== HTTP LONG-POLLING TRANSPORT ==========
 
 let _connecting = false; // re-entrancy lock — the startup promise and the alarm can race into connect()
+// 22.10.26: after the Mac slept, the bridge stayed down for 12.5 hours through two full wakes; the
+// daemon saw no /connect at all. The minute alarm and the page keepalive ping both skip a worker
+// that is connecting or connected, so a connect() parked on a Safari call that never settles
+// (storage, IPC) or a poll loop gone silent with isConnected still true was never retried. Past
+// these bounds the watchdog takes the lock over (_restartStalledBridge).
+const _CONNECT_STALL_MS = 30000;
+const _POLL_STALL_MS = 120000; // the poll fetch aborts at 90s, and a running command beats every 5s
+let _connectingSince = 0;
+let _connectingOwner = 0; // the generation whose connect() holds the lock
+let _lastPollProgressAt = 0;
+function _bridgeStalled(now = Date.now()) {
+  if (_connecting) return now - _connectingSince > _CONNECT_STALL_MS;
+  return isConnected && now - _lastPollProgressAt > _POLL_STALL_MS;
+}
+function _restartStalledBridge() {
+  if (!_enabled || _bridgeWorkerSuperseded || _bridgeWorkerRetiring || !_bridgeStalled()) return false;
+  console.log("Safari MCP: bridge stalled, restarting the connection");
+  _connecting = false;
+  isConnected = false;
+  if (_reconnectTimer) { clearTimeout(_reconnectTimer); _reconnectTimer = null; }
+  connect(); // bumps the generation and aborts the stalled poll
+  return true;
+}
 function _restartInvalidatedConnect(pollGeneration) {
   if (_enabled && !_bridgeWorkerRetiring && pollGeneration === _pollLoopGeneration) return false;
+  // The watchdog took the lock over from this attempt: its successor owns it, so stand down
+  // quietly instead of releasing that lock and tearing the successor down.
+  if (_connectingOwner !== pollGeneration) return true;
   _connecting = false;
   // OFF→ON can happen while /connect or profile verification is awaiting Safari. The
   // ON call sees the lock and returns, so the invalidated attempt itself must hand off
@@ -609,10 +636,12 @@ async function connect() {
   // could each spawn a poll loop before the other assigned pollAbort.
   if (_connecting) return;
   _connecting = true;
+  _connectingSince = Date.now();
   // Invalidate the previous loop before aborting it. An AbortError from an intentional
   // reconnect must not see a still-true isConnected flag and continue alongside the
   // successor loop.
   const pollGeneration = ++_pollLoopGeneration;
+  _connectingOwner = pollGeneration;
   isConnected = false;
   if (pollAbort) {
     try { pollAbort.abort(); } catch {}
@@ -633,6 +662,8 @@ async function connect() {
       // The optional reload capability travels in a header and is never logged or put in
       // a URL; the localhost bridge explicitly permits that one preflighted header.
       const reloadHandoffToken = await _storedReloadHandoffToken();
+      // A watchdog restart may have taken over while this attempt waited on Safari.
+      if (_restartInvalidatedConnect(pollGeneration)) return;
       const connectHeaders = reloadHandoffToken
         ? { "X-Safari-MCP-Reload-Handoff": reloadHandoffToken }
         : {};
@@ -699,6 +730,7 @@ async function connect() {
       if (_reconnectTimer) { clearTimeout(_reconnectTimer); _reconnectTimer = null; }
       updateBadge("ON");
       _startHeartbeat(); // Keep service worker alive between polls
+      _lastPollProgressAt = Date.now();
       _connecting = false;
       pollForCommands(pollGeneration);
       return;
@@ -755,6 +787,7 @@ async function pollForCommands(pollGeneration) {
       // kill the body), and a loop it invalidated must still run a command it received:
       // the host marked it dispatched to this worker, so nobody else ever will.
       if (pollAbort === controller) pollAbort = null;
+      _lastPollProgressAt = Date.now();
       const invalidated = pollGeneration !== _pollLoopGeneration;
       if (invalidated && res.status !== 200) return;
       if (res.status === 423) {
@@ -793,6 +826,7 @@ async function pollForCommands(pollGeneration) {
           // previous generation finishes its already-claimed command.
           if (msg) {
             beat = setInterval(() => {
+              _lastPollProgressAt = Date.now(); // a running command is progress, not a stall
               _bridgeFetch(`${bridgeUrl}/heartbeat`, { method: "POST" }).catch(() => {});
             }, 5000);
             await previousExecution.catch(() => {});
@@ -4959,6 +4993,7 @@ function _stopHeartbeat() {
 browser.alarms.create("keepalive", { periodInMinutes: 1 });
 browser.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "keepalive" || alarm.name === "reconnect") {
+    _restartStalledBridge();
     // Only reconnect if disconnected, enabled, and no reconnect already scheduled or in
     // flight — a worker woken by this alarm is still connecting, not disconnected
     if (!isConnected && !_connecting && _enabled && !_bridgeWorkerSuperseded && !_bridgeWorkerRetiring && !_reconnectTimer) {
