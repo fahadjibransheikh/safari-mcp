@@ -316,6 +316,20 @@ function _claimURL(url) {
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) _addOwnedURL("https://" + url);
 }
 
+// Without SAFARI_PROFILE, AppleScript can open a tab only in `front window`, the user's; only the
+// extension opens one in the agent window. With the bridge down (its worker stopped polling for
+// 12 hours, 22.10.26) every new tab landed among the user's tabs. SAFARI_MCP_REQUIRE_EXTENSION
+// refuses instead; off by default, so AppleScript-only setups keep opening tabs.
+function _refuseFrontWindowTab() {
+  const required = String(process.env.SAFARI_MCP_REQUIRE_EXTENSION || "").trim().toLowerCase();
+  if (process.env.SAFARI_PROFILE || !["1", "true", "yes", "on"].includes(required)) return;
+  throw new Error(
+    "No tab opened: the Safari extension could not open it (bridge disconnected or command failed), and " +
+    "AppleScript would open it in your front Safari window. Run safari_doctor; if no worker is connected, open Safari > Settings > " +
+    "Extensions (or toggle Safari MCP Bridge off and on) to wake it, then retry."
+  );
+}
+
 // Open a tab through AppleScript as one of the session's own: its URL claimed, and the tab tracked
 // by the marker safari.newTab() mints for it, so the session's tab cap, shutdown cleanup and the
 // memory sweep count and close it, and a close forgets it. The URL the caller asked for stays the
@@ -328,6 +342,7 @@ function _claimURL(url) {
 // and a switch that adopted the user's tab (SAFARI_MCP_ALLOW_USER_TABS) meanwhile got the user's
 // tab recorded among the ones the cap and cleanup close.
 async function _openTabViaAppleScript(url) {
+  _refuseFrontWindowTab();
   const mySession = `${SESSION_ID}:${currentSessionId()}`;
   let minted = null;
   try {
@@ -2227,7 +2242,7 @@ async function _runExtensionBatchAction(action, args = {}) {
       let viaAppleScript = false;
       const raw = await extensionOrFallback(
         "new_tab", { url: requestedUrl },
-        () => { viaAppleScript = true; return safari.newTab(requestedUrl); }
+        () => { viaAppleScript = true; _refuseFrontWindowTab(); return safari.newTab(requestedUrl); }
       );
       const value = _sanitizeTabResult(normalize(raw));
       if (value && typeof value === "object" && value.tabIndex) {

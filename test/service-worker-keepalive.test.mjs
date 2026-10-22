@@ -490,6 +490,7 @@ test("background accepts only a page-bound authority-free keepalive message", ()
     _connecting: false,
     _reconnectTimer: null,
     connect() { throw new Error("connected worker must not reconnect on a ping"); },
+    _restartStalledBridge() { return false; }, // a healthy worker is not stalled
   };
   vm.runInNewContext(listenerSource, context);
 

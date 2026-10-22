@@ -111,6 +111,7 @@ test("the minute alarm leaves a connect that is already in flight alone", () => 
     Function(
       "browser", "scheduleReconnect", "_startHeartbeat",
       `let isConnected = false;
+       const _restartStalledBridge = () => false; // a connect just started is not stalled
        let _enabled = true;
        let _bridgeWorkerSuperseded = false;
        let _bridgeWorkerRetiring = false;
