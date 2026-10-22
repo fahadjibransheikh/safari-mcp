@@ -1001,9 +1001,10 @@ async function handleCommand(type, payload) {
 
   // Safety: never operate on tabs outside this session's profile window. Checked against
   // the session's own window — with one shared id, a session working in a second window
-  // of the same profile was told its tab was "a different profile".
+  // of the same profile was told its tab was "a different profile". new_tab never acts on the
+  // resolved tab: refused here, it fell back to AppleScript and opened in the user's front window.
   const sessionWindow = _windowForSession(sessionId);
-  if (tabId !== null && sessionWindow && targetTab.windowId !== sessionWindow) {
+  if (type !== "new_tab" && tabId !== null && sessionWindow && targetTab.windowId !== sessionWindow) {
     throw new Error("Tab belongs to a different profile \u2014 refusing to operate on personal tabs");
   }
 
