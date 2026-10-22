@@ -388,6 +388,7 @@ Agent tabs open in a window of their own, created in the background at 1440×900
 | `SAFARI_MCP_SESSION_IDLE_MIN` | `30` | In HTTP mode, end a session idle this many minutes and close the tabs it opened (they also close on the session's DELETE). `0` = never. |
 | `SAFARI_PROFILE` | unset | Bind sessions to a named Safari profile. Unset = your ordinary windows. |
 | `SAFARI_MCP_ALLOW_USER_TABS` | off | Let `safari_switch_tab` adopt a tab **you** already had open, instead of refusing it (see below). |
+| `SAFARI_MCP_REQUIRE_EXTENSION` | off | Refuse to open a tab when the extension cannot, instead of opening it through AppleScript in your front window. For setups that rely on the extension's agent window. Ignored with `SAFARI_PROFILE`. |
 | `MCP_MAX_TABS` | `6` | Tabs one session may keep open. Opening one more closes that session's oldest tab, and `safari_new_tab` names it in `evictedTab` (its receipt). |
 | `SAFARI_MCP_RAISE_ON_NAVIGATE` | off | Let navigation bring Safari to the front, and stop the focus guard from putting your previous app back. |
 | `SAFARI_MCP_TOOLS` | all | `core` registers only the 31 everyday tools (about 5.5k tokens of definitions instead of 14k), or give a comma list of tool names. For clients that load every tool definition up front. |
